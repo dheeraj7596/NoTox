@@ -506,7 +506,7 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
     losses_for_plots = []
-    sample_every = 1000
+    sample_every = 10
     step_counts = 0
 
     for epoch in range(args.num_train_epochs):
