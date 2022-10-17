@@ -63,23 +63,6 @@ MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
-def compare(gen_contexts, answers):
-    length = len(gen_contexts)
-    assert len(gen_contexts) == len(answers)
-    anals = []
-    for i in range(length):
-        c = gen_contexts[i]
-        print(c)
-        print("*" * 80)
-        a = answers[i]
-        context = c.split("context :")[1]
-        if a in context:
-            anals.append(1)
-        else:
-            anals.append(0)
-    return sum(anals) / length
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a causal language modeling task")
     parser.add_argument(
@@ -208,6 +191,12 @@ def parse_args():
         "--hub_model_id", type=str, help="The name of the repository to keep in sync with the local `output_dir`."
     )
     parser.add_argument("--hub_token", type=str, help="The token to use to push to the Model Hub.")
+    parser.add_argument(
+        "--checkpointing_steps",
+        type=int,
+        default=None,
+        help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.",
+    )
     args = parser.parse_args()
 
     # Sanity checks
@@ -443,8 +432,8 @@ def main():
         )
 
     # Log a few random samples from the training set:
-    # for index in random.sample(range(len(train_dataset)), 3):
-    #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
+    for index in random.sample(range(len(train_dataset)), 3):
+        logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
     train_dataloader = DataLoader(
@@ -493,6 +482,10 @@ def main():
     else:
         args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
+    checkpointing_steps = args.checkpointing_steps
+    if checkpointing_steps is not None:
+        checkpointing_steps = int(checkpointing_steps)
+
     lr_scheduler = get_scheduler(
         name=args.lr_scheduler_type,
         optimizer=optimizer,
@@ -514,7 +507,6 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
     losses_for_plots = []
-    percent_ans_samples = []
     sample_every = 1000
     step_counts = 0
 
@@ -524,7 +516,6 @@ def main():
             if args.analyze_answers and step_counts % sample_every == 0:
                 print('  Batch {:>5,}  of  {:>5,}.'.format(step, len(train_dataloader)), flush=True)
                 model.eval()
-                gen_contexts = []
                 for sample_step, sample_batch in enumerate(anal_dataloader):
                     temp_ids = sample_batch["input_ids"]
                     temp_ids = temp_ids[temp_ids != tokenizer.pad_token_id].unsqueeze(0)
@@ -535,8 +526,8 @@ def main():
                         max_length=200,
                         num_return_sequences=1
                     )
-                    gen_contexts.append(tokenizer.decode(sample_output[0]))
-                percent_ans_samples.append(compare(gen_contexts, answers))
+                    gen_sent = tokenizer.decode(sample_output[0])
+                    print(gen_sent, flush=True)
                 model.train()
             step_counts += 1
             outputs = model(**batch)
@@ -549,6 +540,14 @@ def main():
                 optimizer.zero_grad()
                 progress_bar.update(1)
                 completed_steps += 1
+
+            if completed_steps % checkpointing_steps == 0:
+                output_dir = f"step_{completed_steps}"
+                if args.output_dir is not None:
+                    output_dir = os.path.join(args.output_dir, output_dir)
+                print("Checkpointing..", flush=True)
+                print("Loss:", loss, flush=True)
+                accelerator.save_state(output_dir)
 
             if completed_steps >= args.max_train_steps:
                 break
@@ -593,8 +592,6 @@ def main():
             if args.push_to_hub:
                 repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
         pickle.dump(losses_for_plots, open(os.path.join(args.output_dir, "losses.pkl"), "wb"))
-        if args.analyze_answers:
-            pickle.dump(percent_ans_samples, open(os.path.join(args.output_dir, "percent_ans_samples.pkl"), "wb"))
 
 
 if __name__ == "__main__":
