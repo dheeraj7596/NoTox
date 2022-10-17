@@ -426,7 +426,6 @@ def main():
 
     if args.analyze_answers:
         anal_dataset = lm_datasets["anal"]
-        answers = list(anal_dataset["answer"])
         anal_dataloader = DataLoader(
             anal_dataset, collate_fn=default_data_collator, batch_size=1
         )
