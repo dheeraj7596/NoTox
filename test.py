@@ -339,6 +339,7 @@ def main():
         lm_datasets = raw_datasets.map(
             tokenize_function,
             batched=True,
+            batch_size=args.per_device_eval_batch_size,
             num_proc=args.preprocessing_num_workers,
             load_from_cache_file=not args.overwrite_cache,
             desc="Running tokenizer on dataset",
@@ -363,25 +364,30 @@ def main():
     logger.info("***** Generating *****")
     model.eval()
     gen_seqs = []
+    batch_count = 0
     for step, batch in enumerate(test_dataloader):
+        if batch_count % 10 == 0:
+            print("Batch finished", batch_count, "out of", int(len(test_dataset) / args.per_device_eval_batch_size),
+                  flush=True)
         with torch.no_grad():
             output_sequences = model.generate(
                 **batch,
                 do_sample=True,
                 top_k=10,
-                max_length=len(batch["input_ids"][0]) + 200,
+                max_length=min(len(batch["input_ids"][0]) + 200, tokenizer.model_max_length),
                 num_return_sequences=1,
                 pad_token_id=tokenizer.eos_token_id
             )
             outputs = [tokenizer.decode(x, skip_special_tokens=True) for x in output_sequences]
             gen_seqs += outputs
+        batch_count += 1
 
-    df = pd.DataFrame({"prompt": prompts, "gen": gen_seqs})
-    df_scores = compute_tox_scores(df)
+    df = pd.DataFrame({"prompts": prompts, "gen": gen_seqs})
+    # df_scores = compute_tox_scores(df)
+    df_scores = df
 
     if args.output_dir is not None:
         accelerator.wait_for_everyone()
-        pickle.dump(df_scores, open(os.path.join(args.output_dir, "scores.pkl"), "wb"))
         df_scores.to_csv(os.path.join(args.output_dir, "scores.csv"), index=False)
 
 
